@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Logistics Route Optimization System | Decision Support System</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+    <!-- A. DASHBOARD HEADER -->
+    <header class="dashboard-header">
+        <div class="header-container">
+            <div class="header-titles">
+                <div class="badge-dss">Decision Support System • Optimization Under Certainty</div>
+                <h1>Logistics Route Optimization System</h1>
+                <p class="subtitle">A Decision Support System for minimizing delivery transportation costs.</p>
+            </div>
+            <div class="header-actions">
+                <button type="button" class="btn-info" onclick="toggleTheoryModal()">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                    Mathematical Model &amp; DSS Guide
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- MAIN DASHBOARD CONTENT -->
+    <main class="dashboard-main">
+
+        <!-- FLASH / NOTIFICATION MESSAGES -->
+        <div id="alertBox" class="alert-box {% if not get_flashed_messages() %}hidden{% endif %}">
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, msg in messages %}
+                        <div class="alert alert-{{ category }}">{{ msg }}</div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+        </div>
+
+        <div class="dashboard-grid">
+
+            <!-- LEFT COLUMN: INPUTS & CONFIGURATION -->
+            <section class="config-column">
+
+                <!-- B. ROUTE CONFIGURATION -->
+                <div class="card config-card">
+                    <div class="card-header">
+                        <h2>
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+                            Route Configuration
+                        </h2>
+                        <span class="card-subtitle">Define vehicle depot, destinations, and fuel parameters</span>
+                    </div>
+
+                    <form id="optimizationForm" action="{{ url_for('optimize') }}" method="POST">
+                        
+                        <!-- Starting Depot -->
+                        <div class="form-group">
+                            <label for="depot_id"><strong>Starting Depot</strong> (Origin &amp; Final Return)</label>
+                            <select id="depot_id" name="depot_id" class="form-control" required onchange="handleDepotChange()">
+                                {% for loc in locations %}
+                                    <option value="{{ loc.id }}" {% if loc.id == selected_depot_id %}selected{% endif %}>
+                                        {{ loc.name }} {% if loc.is_default_depot %}(Default Depot){% endif %}
+                                    </option>
+                                {% endfor %}
+                            </select>
+                            <small class="form-text">The delivery vehicle departs from and returns to this central depot.</small>
+                        </div>
+
+                        <!-- Delivery Locations -->
+                        <div class="form-group">
+                            <div class="group-header">
+                                <label><strong>Delivery Destinations</strong> (Visit Exactly Once)</label>
+                                <div class="quick-select">
+                                    <button type="button" class="btn-text" onclick="selectAllDestinations()">Select All</button>
+                                    <span class="sep">•</span>
+                                    <button type="button" class="btn-text" onclick="clearAllDestinations()">Clear All</button>
+                                </div>
+                            </div>
+                            <div class="checkbox-grid" id="destinationsContainer">
+                                {% for loc in locations %}
+                                    <div class="checkbox-item {% if loc.id == selected_depot_id %}depot-disabled{% endif %}" id="dest-wrapper-{{ loc.id }}">
+                                        <input type="checkbox" 
+                                               id="loc_{{ loc.id }}" 
+                                               name="delivery_ids" 
+                                               value="{{ loc.id }}"
+                                               {% if loc.id in selected_delivery_ids and loc.id != selected_depot_id %}checked{% endif %}
+                                               {% if loc.id == selected_depot_id %}disabled{% endif %}>
+                                        <label for="loc_{{ loc.id }}">
+                                            <span class="loc-name">{{ loc.name }}</span>
+                                            <span class="loc-badge" id="badge-{{ loc.id }}">
+                                                {% if loc.id == selected_depot_id %}Depot{% else %}Delivery{% endif %}
+                                            </span>
+                                        </label>
+                                    </div>
+                                {% endfor %}
+                            </div>
+                            <small class="form-text">Select which customer locations require delivery on this trip.</small>
+                        </div>
+
+                        <!-- Fuel Parameters -->
+                        <div class="params-row">
+                            <div class="form-group half-width">
+                                <label for="fuel_price"><strong>Fuel Price</strong> ($ / Litre)</label>
+                                <div class="input-prefix-wrapper">
+                                    <span class="input-prefix">$</span>
+                                    <input type="number" id="fuel_price" name="fuel_price" class="form-control with-prefix" 
+                                           step="0.01" min="0.01" max="50.00" value="{{ '%.2f'|format(fuel_price) }}" required>
+                                </div>
+                                <small class="form-text">Fixed price P</small>
+                            </div>
+
+                            <div class="form-group half-width">
+                                <label for="fuel_consumption"><strong>Fuel Consumption</strong> (L / 100 km)</label>
+                                <div class="input-suffix-wrapper">
+                                    <input type="number" id="fuel_consumption" name="fuel_consumption" class="form-control with-suffix" 
+                                           step="0.1" min="1.0" max="150.0" value="{{ '%.1f'|format(fuel_consumption) }}" required>
+                                    <span class="input-suffix">L/100km</span>
+                                </div>
+                                <small class="form-text">Vehicle fleet rate F</small>
+                            </div>
+                        </div>
+
+                        <!-- D. OPTIMIZE ROUTE BUTTON -->
+                        <div class="form-action">
+                            <button type="submit" id="btnOptimize" class="btn-primary">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polygon points="10 8 16 12 10 16 10 8"></polygon></svg>
+                                Find Optimal Route
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- C. DISTANCE INFORMATION -->
+                <div class="card distance-card">
+                    <div class="card-header flex-between">
+                        <div>
+                            <h2>
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+                                Distance Matrix (Kilometres)
+                            </h2>
+                            <span class="card-subtitle">Editable distance table between Zimbabwean logistics hubs (demonstration data)</span>
+                        </div>
+                        <div class="table-actions">
+                            <button type="button" class="btn-secondary btn-sm" onclick="saveDistanceMatrix()" id="btnSaveDistances">
+                                Save Distances
+                            </button>
+                            <button type="button" class="btn-outline-danger btn-sm" onclick="resetDefaults()">
+                                Reset Defaults
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="demo-notice">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                        <span>Distances are realistic road kilometres in Zimbabwe. You can click any cell to edit distances, then click <strong>Save Distances</strong>.</span>
+                    </div>
+
+                    <div class="table-responsive">
+                        <table class="distance-table" id="distanceMatrixTable">
+                            <thead>
+                                <tr>
+                                    <th class="origin-col">Origin \ Destination</th>
+                                    {% for loc in locations %}
+                                        <th title="{{ loc.name }}">{{ loc.name }}</th>
+                                    {% endfor %}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for row_loc in locations %}
+                                    <tr>
+                                        <td class="row-header"><strong>{{ row_loc.name }}</strong></td>
+                                        {% for col_loc in locations %}
+                                            {% set d_val = distance_matrix.get((row_loc.id, col_loc.id), 0.0) %}
+                                            <td class="matrix-cell {% if row_loc.id == col_loc.id %}diagonal-cell{% endif %}">
+                                                {% if row_loc.id == col_loc.id %}
+                                                    <span class="zero-val">0</span>
+                                                {% else %}
+                                                    <input type="number" 
+                                                           class="cell-input" 
+                                                           data-origin="{{ row_loc.id }}" 
+                                                           data-dest="{{ col_loc.id }}" 
+                                                           value="{{ d_val }}" 
+                                                           step="1" 
+                                                           min="0" 
+                                                           onchange="markCellModified(this)">
+                                                {% endif %}
+                                            </td>
+                                        {% endfor %}
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+            </section>
+
+            <!-- RIGHT COLUMN: RESULTS & DECISION ANALYSIS -->
+            <section class="results-column">
+
+                {% if solution and solution.success %}
+                    <!-- STATUS BADGE -->
+                    <div class="status-banner" id="statusBanner">
+                        <div class="status-indicator">
+                            <span class="status-dot green"></span>
+                            <span class="status-text" id="statusText">{{ solution.status }}</span>
+                        </div>
+                        <div class="solver-badge">
+                            Solved with <strong>Google OR-Tools</strong> (TSP Engine)
+                        </div>
+                    </div>
+
+                    <!-- 5. OPTIMIZATION RESULTS SUMMARY CARDS -->
+                    <div class="summary-cards-grid">
+                        <!-- Total Distance -->
+                        <div class="metric-card">
+                            <div class="metric-header">
+                                <span class="metric-title">Optimal Distance</span>
+                                <div class="metric-icon distance-icon">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="3 11 22 2 13 21 11 13 3 11"></polygon></svg>
+                                </div>
+                            </div>
+                            <div class="metric-value" id="valTotalDistance">
+                                {{ solution.optimal_route.total_distance_km }} <span class="unit">km</span>
+                            </div>
+                            <div class="metric-footnote">Shortest Hamiltonian tour</div>
+                        </div>
+
+                        <!-- Fuel Used -->
+                        <div class="metric-card">
+                            <div class="metric-header">
+                                <span class="metric-title">Fuel Consumed</span>
+                                <div class="metric-icon fuel-icon">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 2v6h6V2H3zm13 0h5v6h-5V2zM3 16h6v6H3v-6zm13 3h5v3h-5v-3z"></path></svg>
+                                </div>
+                            </div>
+                            <div class="metric-value" id="valFuelUsed">
+                                {{ solution.optimal_route.total_fuel_litres }} <span class="unit">Litres</span>
+                            </div>
+                            <div class="metric-footnote">At {{ '%.1f'|format(fuel_consumption) }} L / 100 km</div>
+                        </div>
+
+                        <!-- Estimated Fuel Cost -->
+                        <div class="metric-card highlight-cost">
+                            <div class="metric-header">
+                                <span class="metric-title">Transportation Fuel Cost</span>
+                                <div class="metric-icon cost-icon">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+                                </div>
+                            </div>
+                            <div class="metric-value" id="valFuelCost">
+                                ${{ '%.2f'|format(solution.optimal_route.total_fuel_cost) }}
+                            </div>
+                            <div class="metric-footnote">At ${{ '%.2f'|format(fuel_price) }} / L</div>
+                        </div>
+
+                        <!-- Savings Badge -->
+                        <div class="metric-card savings-card">
+                            <div class="metric-header">
+                                <span class="metric-title">DSS Cost Reduction</span>
+                                <div class="metric-icon savings-icon">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline><polyline points="17 6 23 6 23 12"></polyline></svg>
+                                </div>
+                            </div>
+                            <div class="metric-value text-success" id="valPctReduction">
+                                {{ solution.comparison.percentage_reduction }}%
+                            </div>
+                            <div class="metric-footnote">Saved ${{ '%.2f'|format(solution.comparison.cost_saved) }}</div>
+                        </div>
+                    </div>
+
+                    <!-- RECOMMENDED SEQUENCE DISPLAY -->
+                    <div class="card sequence-card">
+                        <div class="card-header">
+                            <h2>
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"></polyline><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+                                Optimal Delivery Sequence
+                            </h2>
+                        </div>
+                        <div class="sequence-box" id="optimalRouteDisplay">
+                            {{ solution.optimal_route.route_display }}
+                        </div>
+                    </div>
+
+                    <!-- VISUAL ROUTE FLOWCHART -->
+                    <div class="card visual-route-card">
+                        <div class="card-header">
+                            <h2>
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="19" r="3"></circle><path d="M9 19h8.5a4.5 4.5 0 0 0 0-9H7a3 3 0 0 1 0-6h11"></path><circle cx="18" cy="4" r="3"></circle></svg>
+                                Visual Route Flowchart
+                            </h2>
+                            <span class="card-subtitle">Graphical representation of the closed-loop delivery tour</span>
+                        </div>
+                        <div class="route-visual-wrapper" id="routeVisualWrapper">
+                            <div class="route-nodes-container" id="routeNodesContainer">
+                                {% for name in solution.optimal_route.route_names %}
+                                    <div class="route-node {% if loop.first or loop.last %}depot-node{% endif %}">
+                                        <div class="node-circle">
+                                            {% if loop.first or loop.last %}
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
+                                            {% else %}
+                                                {{ loop.index - 1 }}
+                                            {% endif %}
+                                        </div>
+                                        <div class="node-label">{{ name }}</div>
+                                    </div>
+                                    {% if not loop.last %}
+                                        {% set leg = solution.optimal_route.legs[loop.index0] %}
+                                        <div class="route-edge">
+                                            <div class="edge-line"></div>
+                                            <div class="edge-info">{{ leg.distance_km }} km<br><span>${{ '%.2f'|format(leg.fuel_cost) }}</span></div>
+                                            <div class="edge-arrow">&rarr;</div>
+                                        </div>
+                                    {% endif %}
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 6. DECISION ANALYSIS & COMPARISON (CRUCIAL DSS SECTION) -->
+                    <div class="card comparison-card">
+                        <div class="card-header">
+                            <h2>
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+                                Decision Analysis: Unoptimized vs. Optimized Route
+                            </h2>
+                            <span class="card-subtitle">Demonstrates how the DSS supports management in selecting the optimal alternative</span>
+                        </div>
+
+                        <div class="comparison-table-wrapper">
+                            <table class="comparison-table">
+                                <thead>
+                                    <tr>
+                                        <th>Evaluation Metric</th>
+                                        <th>Original / Default Route</th>
+                                        <th>Optimized Route (OR-Tools)</th>
+                                        <th class="savings-col">Total Savings</th>
+                                        <th class="pct-col">% Reduction</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td><strong>Total Distance (km)</strong></td>
+                                        <td id="compOrigDist">{{ solution.original_route.total_distance_km }} km</td>
+                                        <td class="text-bold-primary" id="compOptDist">{{ solution.optimal_route.total_distance_km }} km</td>
+                                        <td class="text-bold-success" id="compSavedDist">- {{ solution.comparison.distance_saved_km }} km</td>
+                                        <td class="text-bold-success" id="compPctDist">{{ solution.comparison.percentage_reduction }}%</td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>Estimated Fuel (Litres)</strong></td>
+                                        <td id="compOrigFuel">{{ solution.original_route.total_fuel_litres }} L</td>
+                                        <td class="text-bold-primary" id="compOptFuel">{{ solution.optimal_route.total_fuel_litres }} L</td>
+                                        <td class="text-bold-success" id="compSavedFuel">- {{ solution.comparison.fuel_saved_litres }} L</td>
+                                        <td class="text-bold-success">{{ solution.comparison.percentage_reduction }}%</td>
+                                    </tr>
+                                    <tr class="highlight-row">
+                                        <td><strong>Total Fuel Cost ($)</strong></td>
+                                        <td id="compOrigCost">${{ '%.2f'|format(solution.original_route.total_fuel_cost) }}</td>
+                                        <td class="text-bold-primary" id="compOptCost">${{ '%.2f'|format(solution.optimal_route.total_fuel_cost) }}</td>
+                                        <td class="text-bold-success" id="compSavedCost">- ${{ '%.2f'|format(solution.comparison.cost_saved) }}</td>
+                                        <td class="badge-reduction-cell">
+                                            <span class="badge-reduction" id="compPctCost">-{{ solution.comparison.percentage_reduction }}%</span>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div class="dss-insight-box">
+                            <div class="insight-icon">
+                                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                            </div>
+                            <div class="insight-text">
+                                <strong>Managerial DSS Insight:</strong>
+                                <span id="compExplanation">{{ solution.comparison.explanation }}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- STEP-BY-STEP ROUTE LEGS TABLE -->
+                    <div class="card legs-card">
+                        <div class="card-header">
+                            <h2>
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><list x1="8" y1="6" x2="21" y2="6"></list><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
+                                Detailed Route Breakdown (Ordered Legs)
+                            </h2>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="legs-table">
+                                <thead>
+                                    <tr>
+                                        <th>Leg #</th>
+                                        <th>Origin</th>
+                                        <th>Destination</th>
+                                        <th>Distance (km)</th>
+                                        <th>Fuel Used (L)</th>
+                                        <th>Fuel Cost ($)</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="legsTableBody">
+                                    {% for leg in solution.optimal_route.legs %}
+                                        <tr>
+                                            <td><span class="leg-pill">{{ leg.step }}</span></td>
+                                            <td><strong>{{ leg.origin_name }}</strong></td>
+                                            <td><strong>{{ leg.destination_name }}</strong></td>
+                                            <td>{{ leg.distance_km }} km</td>
+                                            <td>{{ leg.fuel_litres }} L</td>
+                                            <td class="leg-cost">${{ '%.2f'|format(leg.fuel_cost) }}</td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                                <tfoot>
+                                    <tr class="legs-total-row">
+                                        <td colspan="3"><strong>Total Delivery Tour</strong></td>
+                                        <td id="footerDist"><strong>{{ solution.optimal_route.total_distance_km }} km</strong></td>
+                                        <td id="footerFuel"><strong>{{ solution.optimal_route.total_fuel_litres }} L</strong></td>
+                                        <td id="footerCost" class="text-bold-primary"><strong>${{ '%.2f'|format(solution.optimal_route.total_fuel_cost) }}</strong></td>
+                                    </tr>
+                                </tfoot>
+                            </table>
+                        </div>
+                    </div>
+
+                {% else %}
+                    <!-- ERROR OR EMPTY STATE -->
+                    <div class="card empty-state-card">
+                        <div class="empty-icon">⚠️</div>
+                        <h3>Unable to Generate Route</h3>
+                        <p>{{ solution.error if solution else 'Please select depot and delivery locations, then click "Find Optimal Route".' }}</p>
+                    </div>
+                {% endif %}
+
+            </section>
+
+        </div>
+    </main>
+
+    <!-- FOOTER -->
+    <footer class="dashboard-footer">
+        <p>Logistics Route Optimization Decision Support System • University Decision Support Systems (DSS) Project</p>
+        <p class="footer-sub">Mathematical Modelling under Certainty • Built with Python, Flask, SQLite &amp; Google OR-Tools</p>
+    </footer>
+
+    <!-- MATHEMATICAL MODEL & DSS ACADEMIC REFERENCE MODAL -->
+    <div id="theoryModal" class="modal-overlay hidden" onclick="if(event.target === this) toggleTheoryModal()">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>DSS Mathematical Model &amp; System Architecture</h2>
+                <button type="button" class="btn-close" onclick="toggleTheoryModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <h3>1. Problem Formulation: Travelling Salesperson Problem (TSP)</h3>
+                <p>
+                    The delivery routing problem is formulated as a classic <strong>Travelling Salesperson Problem (TSP)</strong> 
+                    operating under <em>conditions of certainty</em>. In this environment, all customer locations, the distance matrix \(D_{ij}\), 
+                    the vehicle fuel consumption rate \(F\), and the unit fuel price \(P\) are completely known, fixed, and deterministic.
+                </p>
+
+                <h3>2. Mathematical Optimization Model</h3>
+                <div class="math-box">
+                    <p class="math-formula"><strong>Objective Function:</strong></p>
+                    <p class="math-code">Minimize Z = &Sigma;<sub>(i, j)</sub> C<sub>ij</sub> &times; X<sub>ij</sub></p>
+                    
+                    <p class="math-formula"><strong>Fuel Cost Calculation per Leg (i, j):</strong></p>
+                    <p class="math-code">C<sub>ij</sub> = D<sub>ij</sub> &times; (F / 100) &times; P</p>
+
+                    <p><strong>Where:</strong></p>
+                    <ul>
+                        <li><strong>Z</strong>: Total transportation fuel cost for the complete tour ($).</li>
+                        <li><strong>C<sub>ij</sub></strong>: Transportation fuel cost of travelling directly from location <em>i</em> to location <em>j</em> ($).</li>
+                        <li><strong>D<sub>ij</sub></strong>: Road distance between location <em>i</em> and location <em>j</em> (km).</li>
+                        <li><strong>F</strong>: Vehicle fuel consumption rate (litres per 100 km).</li>
+                        <li><strong>P</strong>: Fixed fuel price per litre ($/L).</li>
+                        <li><strong>X<sub>ij</sub></strong>: Binary decision variable where:
+                            <br>&bull; X<sub>ij</sub> = 1 if the vehicle travels directly from location <em>i</em> to location <em>j</em>.
+                            <br>&bull; X<sub>ij</sub> = 0 otherwise.
+                        </li>
+                    </ul>
+
+                    <p class="math-formula"><strong>Operational Constraints:</strong></p>
+                    <ol>
+                        <li><strong>Depot Origin &amp; Return:</strong> The delivery vehicle departs from the designated depot and must return to the same depot after completing all deliveries.</li>
+                        <li><strong>Single Visit per Destination:</strong> Every selected customer delivery location must be visited exactly once:
+                            <br>&Sigma;<sub>i</sub> X<sub>ij</sub> = 1 &nbsp; and &nbsp; &Sigma;<sub>j</sub> X<sub>ij</sub> = 1 &nbsp;&forall; j.
+                        </li>
+                        <li><strong>Subtour Elimination:</strong> The tour must form a single connected Hamiltonian cycle with no disjoint sub-loops.</li>
+                        <li><strong>Integrity:</strong> Distances and fuel parameters must be strictly non-negative.</li>
+                    </ol>
+                </div>
+
+                <h3>3. Solution Method: Google OR-Tools Routing Solver</h3>
+                <p>
+                    This system uses <strong>Google OR-Tools</strong> (<code>pywrapcp.RoutingModel</code>), an industrial-grade combinatorial optimization library.
+                </p>
+                <ul>
+                    <li><strong>RoutingIndexManager:</strong> Manages node indices and handles vehicle origin/destination mappings.</li>
+                    <li><strong>Transit Callback:</strong> Computes the integer arc cost \(C_{ij}\) in cents for every pair of locations.</li>
+                    <li><strong>First Solution Strategy:</strong> <code>PATH_CHEAPEST_ARC</code> greedily constructs an initial valid feasible tour.</li>
+                    <li><strong>Metaheuristic:</strong> <code>GUIDED_LOCAL_SEARCH</code> iteratively escapes local optima to find the globally optimal delivery tour.</li>
+                </ul>
+
+                <h3>4. Role in Decision Support Systems (DSS)</h3>
+                <p>
+                    Without an automated DSS, logistics planners rely on intuition or arbitrary routing, leading to excessive fuel consumption, vehicle wear, and carbon emissions. 
+                    This DSS quantifies the trade-offs, evaluates alternative sequences against the default order, and presents management with verified cost reductions and transparent leg-by-leg plans.
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn-primary" onclick="toggleTheoryModal()">Close Guide</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- JAVASCRIPT -->
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
